@@ -2,48 +2,78 @@ package parser
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
 	"log"
 	"os"
+	"strconv"
+
+	client "github.com/tsetsik/ports-storage/pkg/client/v1"
 )
 
-// Port is
-type Port struct {
-	Name     string `json:"name"`
-	City     string `json:"city"`
-	Country  string `json:"country"`
-	Province string `json:"provin"`
+// Parser interface
+type Parser interface {
+	ParseFileAsync(path string) error
+}
+
+type parser struct {
+	client client.PortsStorageClient
+}
+
+// NewParser initiates new parser
+func NewParser(clientURI string) (Parser, error) {
+	client, err := client.NewClient(clientURI)
+	if err != nil {
+		return nil, err
+	}
+
+	return &parser{client: client}, nil
 }
 
 // ParseFileAsync that parse json file and return error
-func ParseFileAsync(path string) error {
+func (p *parser) ParseFileAsync(path string) error {
 	input, err := os.Open(path)
 	if err != nil {
 		log.Printf("Failed to read path %v with the following error: %v", path, err)
 		return err
 	}
 
-	go processFile(input)
+	go p.processFile(input)
 
 	return nil
 }
 
-func processFile(input *os.File) {
+func (p *parser) processFile(input *os.File) {
 	dec := json.NewDecoder(input)
 
-	for {
-		var v map[string]*Port
-		if err := dec.Decode(&v); errors.Is(err, io.EOF) {
-			break // done decoding file
-		} else if err != nil {
-			log.Fatal(err)
+	t, _ := dec.Token()
+	if delim, ok := t.(json.Delim); !ok || delim != '{' {
+		log.Printf("Unknown starting token %v", delim)
+		return
+	}
+
+	// while the object contains keys
+	for dec.More() {
+		portKey, err := dec.Token()
+		if err != nil {
+			log.Printf("Error in reading json token - %v with err: %v", portKey, err)
 		}
 
-		for code, data := range v {
-			fmt.Printf("\n Processing code %v with data %v", code, data)
-			// We should use the ports-storage client and store each port
+		port := new(client.Port)
+		err = dec.Decode(port)
+		if err != nil {
+			log.Printf("Error in decoding port: %v", err)
+		}
+
+		// Use code as ID
+		i, err := strconv.Atoi(port.Code)
+		if err != nil {
+			log.Printf("Error in converting code field to id with the following error: %v", err)
+			continue
+		}
+		port.ID = int32(i)
+
+		// Store the parsed port in the db
+		if _, err := p.client.UpsertPort(port); err != nil {
+			log.Printf("Error in storing the port from the client: %v", err)
 		}
 	}
 }

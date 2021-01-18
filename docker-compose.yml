@@ -5,5 +5,10 @@ services:
     working_dir: /app
     environment:
       - PORT=8080
+      - PORTS_CLIENT_URI=ports_storage:9000
     ports:
       - "8080:8080"
+networks:
+  default:
+    external:
+      name: ports-storage_default
